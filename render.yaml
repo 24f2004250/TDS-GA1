@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: eshopco-config-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_ENV
+        value: development
+      - key: APP_PORT
+        value: "8994"
+      - key: APP_WORKERS
+        value: "9"
+      - key: APP_LOG_LEVEL
+        value: info
+      - key: APP_API_KEY
+        value: key-qon6kkams2
