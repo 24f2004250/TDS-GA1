@@ -1,1 +1,4 @@
-fastapi\nuvicorn[standard]\nPyYAML\npython-dotenv\n
+fastapi
+uvicorn[standard]
+PyYAML
+python-dotenv
