@@ -1,64 +1,103 @@
+
 import os
 from pathlib import Path
-from typing import List
+
 import yaml
 from dotenv import dotenv_values
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-DEFAULTS = {"port": 8000, "workers": 1, "debug": False, "log_level": "info", "api_key": "default-secret-000"}
-TYPES = {
-    "port": int,
-    "workers": int,
-    "debug": lambda v: str(v).strip().lower() in {"true", "1", "yes", "on"},
-    "log_level": str,
-    "api_key": str,
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+DEFAULTS = {
+    "port": 8000,
+    "workers": 1,
+    "debug": False,
+    "log_level": "info",
+    "api_key": "default-secret-000",
 }
 
-def normalize_key(raw):
-    key = str(raw).strip()
-    if key.startswith("APP_"):
-        key = key[4:]
-    key = key.lower()
-    return "workers" if key == "num_workers" else key
 
-def apply_layer(config, values):
-    for raw_key, value in values.items():
-        key = normalize_key(raw_key)
-        if value is not None and key in TYPES:
-            config[key] = value
+def coerce(key, value):
+    value = str(value)
 
-def build_config(overrides):
-    config = dict(DEFAULTS)
-    env_name = os.environ.get("APP_ENV", "development")
-    path = Path(f"config.{env_name}.yaml")
-    if path.exists():
-        apply_layer(config, yaml.safe_load(path.read_text(encoding="utf-8")) or {})
-    apply_layer(config, dotenv_values(".env"))
-    os_values = {k: v for k, v in os.environ.items() if k.startswith("APP_") and k != "APP_ENV"}
-    apply_layer(config, os_values)
-    cli = {}
-    for item in overrides:
-        if "=" in item:
-            key, value = item.split("=", 1)
-            cli[key] = value
-    apply_layer(config, cli)
-    result = {}
-    for key, converter in TYPES.items():
-        try:
-            result[key] = converter(config[key])
-        except (TypeError, ValueError):
-            result[key] = DEFAULTS[key]
-    result["api_key"] = "****"
-    return result
+    if key in ("port", "workers"):
+        return int(value)
 
-app = FastAPI(title="eShopCo Configuration Health API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+    if key == "debug":
+        return value.strip().lower() in ("true", "1", "yes", "on")
+
+    return value
+
+
+def normalize_key(key):
+    key = key.strip().lower()
+
+    if key == "num_workers":
+        return "workers"
+
+    return key
+
+
+def apply_layer(config, layer, app_prefix=False):
+    for raw_key, value in layer.items():
+        if value is None:
+            continue
+
+        key = str(raw_key).strip().lower()
+
+        if app_prefix:
+            if not key.startswith("app_"):
+                continue
+            key = key[4:]
+
+        key = normalize_key(key)
+
+        if key in DEFAULTS:
+            config[key] = coerce(key, value)
+
 
 @app.get("/effective-config")
-def effective_config(set: List[str] = Query(default=[])):
-    return build_config(set)
+def effective_config(set: list[str] = Query(default=[])):
+    config = DEFAULTS.copy()
 
-@app.get("/")
-def root():
-    return {"service": "eshopco-config-api", "status": "ok"}
+    # 1. Environment-specific YAML
+    env_name = os.environ.get("APP_ENV", "development")
+    yaml_path = Path(f"config.{env_name}.yaml")
+
+    if yaml_path.exists():
+        with yaml_path.open("r", encoding="utf-8") as file:
+            yaml_config = yaml.safe_load(file) or {}
+        apply_layer(config, yaml_config)
+
+    # 2. .env file (NUM_WORKERS alias supported)
+    env_file = dotenv_values(".env")
+    apply_layer(config, env_file)
+
+    # 3. OS-level APP_* environment variables
+    apply_layer(config, os.environ, app_prefix=True)
+
+    # 4. CLI overrides, highest precedence
+    for item in set:
+        key, separator, value = item.partition("=")
+
+        if not separator:
+            continue
+
+        key = normalize_key(key)
+
+        if key in DEFAULTS:
+            config[key] = coerce(key, value)
+
+    # Never reveal the actual secret
+    config["api_key"] = "****"
+
+    return config
