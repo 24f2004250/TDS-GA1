@@ -1,1 +1,4 @@
-port: 8490\nworkers: 7\napi_key: key-179ihvzy0i\n
+
+port: 8490
+workers: 7
+api_key: key-179ihvzy0i
